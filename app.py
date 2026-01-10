@@ -42,6 +42,10 @@ swaggerui_blueprint = get_swaggerui_blueprint(
 
 app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
 
+# Register GraphQL blueprint
+from graphql_api import graphql_bp
+app.register_blueprint(graphql_bp)
+
 # Hardcoded secret key (CWE-798)
 app.secret_key = "secret123"
 
