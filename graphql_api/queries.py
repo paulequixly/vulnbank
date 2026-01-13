@@ -401,6 +401,11 @@ class Query(graphene.ObjectType):
         if not current_user:
             raise Exception("Authentication required. Please provide a valid Bearer token.")
 
+        # Check if user exists
+        user_check = execute_query(f"SELECT id FROM users WHERE id = {user_id}")
+        if not user_check:
+            raise Exception(f"User with ID {user_id} not found.")
+
         # VULNERABILITY: No check if user_id matches current_user['user_id']!
         # Should be: if user_id != current_user['user_id']: return []
 
